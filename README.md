@@ -29,7 +29,6 @@ assert Xxhash.hash64("test hash") == 11437837717929986876
 ```
 cd src/xxHash
 git pull
-make
 ```
 
 ### TODO

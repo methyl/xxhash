@@ -1,9 +1,12 @@
 name: xxhash
-version: 0.1.0
+version: 0.1.1
 
 authors:
   - Lucjan Suski <lucjansuski@gmail.com>
 
 crystal: 0.28.0
+
+scripts:
+  postinstall: cd src/ext && make
 
 license: MIT
