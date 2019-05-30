@@ -1,3 +1,0 @@
-[submodule "src/ext"]
-	path = src/ext
-	url = https://github.com/Cyan4973/xxHash
