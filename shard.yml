@@ -1,0 +1,9 @@
+name: xxhash
+version: 0.1.0
+
+authors:
+  - Lucjan Suski <lucjansuski@gmail.com>
+
+crystal: 0.28.0
+
+license: MIT
