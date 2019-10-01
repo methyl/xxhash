@@ -4,7 +4,7 @@ version: 0.2.0
 authors:
   - Lucjan Suski <lucjansuski@gmail.com>
 
-crystal: 0.30.1
+crystal: 0.31.1
 
 scripts:
   postinstall: cd src/xxHash && make
