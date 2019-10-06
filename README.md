@@ -34,7 +34,7 @@ git pull
 ### TODO
 
 - [ ] Support xxh3
-- [ ] Support streaming variant
+- [x] Support streaming variant
 - [x] Support xxhash32, xxhash128
 - [x] Support custom seeding
 - [x] Support hashing other types than string
