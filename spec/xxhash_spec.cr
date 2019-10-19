@@ -4,11 +4,11 @@ require "../src/xxhash"
 describe Xxhash do
   context "calculates hash128 with" do
     it "default seed" do
-      expected_hash = LibXXHash::XXH128_Hash.new(low64: 8783152424331972946, high64: 11833394359751653786)
+      expected_hash = LibXXHash::XXH128_Hash.new(low64: 12072926232526126181, high64: 10536754791245776143)
       Xxhash.hash128("test hash").should eq(expected_hash)
     end
     it "11 as seed" do
-      expected_hash = LibXXHash::XXH128_Hash.new(low64: 2734930085301639998, high64: 422024697275480028)
+      expected_hash = LibXXHash::XXH128_Hash.new(low64: 421465192517327795, high64: 9879049699729167117)
       Xxhash.hash128("test hash", 11).should eq(expected_hash)
     end
   end

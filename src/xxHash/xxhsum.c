@@ -1,6 +1,6 @@
 /*
 *  xxhsum - Command line interface for xxhash algorithms
-*  Copyright (C) Yann Collet 2012-2016
+*  Copyright (C) Yann Collet 2013-present
 *
 *  GPL v2 License
 *
@@ -28,8 +28,6 @@
  * Display convention is Big Endian, for both 32 and 64 bits algorithms
  */
 
-#ifndef XXHASH_C_2097394837
-#define XXHASH_C_2097394837
 
 /* ************************************
  *  Compiler Options
@@ -56,8 +54,11 @@
 #include <assert.h>     /* assert */
 #include <errno.h>      /* errno */
 
-#define XXH_STATIC_LINKING_ONLY   /* *_state_t */
 #include "xxhash.h"
+
+#define XXH_STATIC_LINKING_ONLY   /* *_state_t */
+#include "xxhash.h"    /* note : intentional double include, for validation.
+                        * this test ensures that xxhash.h can be included in any order. */
 
 
 /* ************************************
@@ -136,23 +137,24 @@ static __inline int IS_CONSOLE(FILE* stdStream) {
 # define MEM_MODULE
 # if defined (__STDC_VERSION__) && __STDC_VERSION__ >= 199901L   /* C99 */
 #   include <stdint.h>
-    typedef uint8_t  BYTE;
-    typedef uint16_t U16;
+    typedef uint8_t  U8;
     typedef uint32_t U32;
-    typedef  int32_t S32;
     typedef uint64_t U64;
 #  else
-    typedef unsigned char      BYTE;
-    typedef unsigned short     U16;
-    typedef unsigned int       U32;
-    typedef   signed int       S32;
+#   include <limits.h>
+    typedef unsigned char      U8;
+#   if UINT_MAX == 0xFFFFFFFFUL
+      typedef unsigned int     U32;
+#   else
+      typedef unsigned long    U32;
+#   endif
     typedef unsigned long long U64;
 #  endif
 #endif
 
 static unsigned BMK_isLittleEndian(void)
 {
-    const union { U32 u; BYTE c[4]; } one = { 1 };   /* don't use static : performance detrimental  */
+    const union { U32 u; U8 c[4]; } one = { 1 };   /* don't use static : performance detrimental  */
     return one.c[0];
 }
 
@@ -224,8 +226,10 @@ static unsigned BMK_isLittleEndian(void)
 #    define ARCH "arm"
 #  endif
 #elif defined(__powerpc64__) || defined(__ppc64__) || defined(__PPC64__)
-#  if defined(__GNUC__) && defined(__VSX__)
-#    define ARCH "ppc64 + VSX"
+#  if defined(__GNUC__) && defined(__POWER9_VECTOR__)
+#    define ARCH "ppc64 + POWER9 vector"
+#  elif defined(__GNUC__) && defined(__POWER8_VECTOR__)
+#    define ARCH "ppc64 + POWER8 vector"
 #  else
 #    define ARCH "ppc64"
 #  endif
@@ -263,7 +267,7 @@ static size_t XXH_DEFAULT_SAMPLE_SIZE = 100 KB;
 #define MAX_MEM    (2 GB - 64 MB)
 
 static const char stdinName[] = "-";
-typedef enum { algo_xxh32, algo_xxh64 } algoType;
+typedef enum { algo_xxh32, algo_xxh64, algo_xxh128 } algoType;
 static const algoType g_defaultAlgo = algo_xxh64;    /* required within main() & usage() */
 
 /* <16 hex char> <SPC> <SPC> <filename> <'\0'>
@@ -343,6 +347,10 @@ static U32 localXXH32(const void* buffer, size_t bufferSize, U32 seed) { return 
 static U32 localXXH64(const void* buffer, size_t bufferSize, U32 seed) { return (U32)XXH64(buffer, bufferSize, seed); }
 
 static U32 localXXH3_64b(const void* buffer, size_t bufferSize, U32 seed) { (void)seed; return (U32)XXH3_64bits(buffer, bufferSize); }
+static U32 localXXH3_64b_seeded(const void* buffer, size_t bufferSize, U32 seed) { return (U32)XXH3_64bits_withSeed(buffer, bufferSize, seed); }
+
+static U32 localXXH3_128b(const void* buffer, size_t bufferSize, U32 seed) { (void)seed; return (U32)(XXH3_128bits(buffer, bufferSize).low64); }
+static U32 localXXH3_128b_seeded(const void* buffer, size_t bufferSize, U32 seed) { return (U32)(XXH3_128bits_withSeed(buffer, bufferSize, seed).low64); }
 
 static void BMK_benchHash(hashFunction h, const char* hName, const void* buffer, size_t bufferSize)
 {
@@ -356,7 +364,7 @@ static void BMK_benchHash(hashFunction h, const char* hName, const void* buffer,
         U32 r=0;
         clock_t cStart;
 
-        DISPLAYLEVEL(2, "%1u-%-17.17s : %10u ->\r", iterationNb, hName, (U32)bufferSize);
+        DISPLAYLEVEL(2, "%1u-%-22.22s : %10u ->\r", iterationNb, hName, (U32)bufferSize);
         cStart = clock();
         while (clock() == cStart);   /* starts clock() at its exact beginning */
         cStart = clock();
@@ -375,7 +383,7 @@ static void BMK_benchHash(hashFunction h, const char* hName, const void* buffer,
                 continue;
             }
             if (timeS < fastestH) fastestH = timeS;
-            DISPLAYLEVEL(2, "%1u-%-17.17s : %10u -> %8.0f it/s (%7.1f MB/s) \r",
+            DISPLAYLEVEL(2, "%1u-%-22.22s : %10u -> %8.0f it/s (%7.1f MB/s) \r",
                     iterationNb, hName, (U32)bufferSize,
                     (double)1 / fastestH,
                     ((double)bufferSize / (1<<20)) / fastestH );
@@ -385,7 +393,7 @@ static void BMK_benchHash(hashFunction h, const char* hName, const void* buffer,
             nbh_perIteration = (U32)nbh_perSecond;
         }
     }
-    DISPLAYLEVEL(1, "%-19.19s : %10u -> %8.0f it/s (%7.1f MB/s) \n", hName, (U32)bufferSize,
+    DISPLAYLEVEL(1, "%-24.24s : %10u -> %8.0f it/s (%7.1f MB/s) \n", hName, (U32)bufferSize,
         (double)1 / fastestH,
         ((double)bufferSize / (1<<20)) / fastestH);
     if (g_displayLevel<1)
@@ -420,13 +428,37 @@ static int BMK_benchMem(const void* buffer, size_t bufferSize, U32 specificTest)
 
     /* Bench XXH3 */
     if ((specificTest==0) | (specificTest==5))
-        BMK_benchHash(localXXH3_64b, "XXH3_64bits", buffer, bufferSize);
+        BMK_benchHash(localXXH3_64b, "XXH3_64b", buffer, bufferSize);
 
     /* Bench XXH3 on Unaligned input */
     if ((specificTest==0) | (specificTest==6))
         BMK_benchHash(localXXH3_64b, "XXH3_64b unaligned", ((const char*)buffer)+3, bufferSize);
 
-    if (specificTest > 6) {
+    /* Bench XXH3 */
+    if ((specificTest==0) | (specificTest==7))
+        BMK_benchHash(localXXH3_64b_seeded, "XXH3_64b seeded", buffer, bufferSize);
+
+    /* Bench XXH3 on Unaligned input */
+    if ((specificTest==0) | (specificTest==8))
+        BMK_benchHash(localXXH3_64b_seeded, "XXH3_64b seeded unaligned", ((const char*)buffer)+3, bufferSize);
+
+    /* Bench XXH3 */
+    if ((specificTest==0) | (specificTest==9))
+        BMK_benchHash(localXXH3_128b, "XXH128", buffer, bufferSize);
+
+    /* Bench XXH3 on Unaligned input */
+    if ((specificTest==0) | (specificTest==10))
+        BMK_benchHash(localXXH3_128b, "XXH128 unaligned", ((const char*)buffer)+3, bufferSize);
+
+    /* Bench XXH3 */
+    if ((specificTest==0) | (specificTest==11))
+        BMK_benchHash(localXXH3_128b_seeded, "XXH128 seeded", buffer, bufferSize);
+
+    /* Bench XXH3 on Unaligned input */
+    if ((specificTest==0) | (specificTest==12))
+        BMK_benchHash(localXXH3_128b_seeded, "XXH128 seeded unaligned", ((const char*)buffer)+3, bufferSize);
+
+    if (specificTest > 12) {
         DISPLAY("Benchmark mode invalid.\n");
         return 1;
     }
@@ -472,7 +504,7 @@ static int BMK_benchFiles(const char** fileNamesTable, int nbFiles, U32 specific
             }
 
             /* Fill input buffer */
-            DISPLAYLEVEL(1, "\rLoading %s...        \n", inFileName);
+            DISPLAYLEVEL(2, "\rLoading %s...        \n", inFileName);
             {   size_t const readSize = fread(alignedBuffer, 1, benchedSize, inFile);
                 fclose(inFile);
                 if(readSize != benchedSize) {
@@ -566,25 +598,38 @@ static void BMK_checkResult128(XXH128_hash_t r1, XXH128_hash_t r2)
 }
 
 
-static void BMK_testSequence64(const void* sentence, size_t len, U64 seed, U64 Nresult)
+static void BMK_testXXH32(const void* sequence, size_t len, U32 seed, U32 Nresult)
 {
-    XXH64_state_t state;
-    U64 Dresult;
+    XXH32_state_t state;
     size_t pos;
 
-    Dresult = XXH64(sentence, len, seed);
-    BMK_checkResult64(Dresult, Nresult);
+    BMK_checkResult32(XXH32(sequence, len, seed), Nresult);
+
+    (void)XXH32_reset(&state, seed);
+    (void)XXH32_update(&state, sequence, len);
+    BMK_checkResult32(XXH32_digest(&state), Nresult);
+
+    (void)XXH32_reset(&state, seed);
+    for (pos=0; pos<len; pos++)
+        (void)XXH32_update(&state, ((const char*)sequence)+pos, 1);
+    BMK_checkResult32(XXH32_digest(&state), Nresult);
+}
+
+static void BMK_testXXH64(const void* data, size_t len, U64 seed, U64 Nresult)
+{
+    XXH64_state_t state;
+    size_t pos;
+
+    BMK_checkResult64(XXH64(data, len, seed), Nresult);
 
     (void)XXH64_reset(&state, seed);
-    (void)XXH64_update(&state, sentence, len);
-    Dresult = XXH64_digest(&state);
-    BMK_checkResult64(Dresult, Nresult);
+    (void)XXH64_update(&state, data, len);
+    BMK_checkResult64(XXH64_digest(&state), Nresult);
 
     (void)XXH64_reset(&state, seed);
     for (pos=0; pos<len; pos++)
-        (void)XXH64_update(&state, ((const char*)sentence)+pos, 1);
-    Dresult = XXH64_digest(&state);
-    BMK_checkResult64(Dresult, Nresult);
+        (void)XXH64_update(&state, ((const char*)data)+pos, 1);
+    BMK_checkResult64(XXH64_digest(&state), Nresult);
 }
 
 static void BMK_testXXH3(const void* data, size_t len, U64 seed, U64 Nresult)
@@ -598,24 +643,62 @@ static void BMK_testXXH3(const void* data, size_t len, U64 seed, U64 Nresult)
         U64 const Dresult = XXH3_64bits(data, len);
         BMK_checkResult64(Dresult, Nresult);
     }
+
+    /* streaming API test */
+    {   XXH3_state_t state;
+
+        /* single ingestion */
+        (void)XXH3_64bits_reset_withSeed(&state, seed);
+        (void)XXH3_64bits_update(&state, data, len);
+        BMK_checkResult64(XXH3_64bits_digest(&state), Nresult);
+
+        if (len > 3) {
+            /* 2 ingestions */
+            (void)XXH3_64bits_reset_withSeed(&state, seed);
+            (void)XXH3_64bits_update(&state, data, 3);
+            (void)XXH3_64bits_update(&state, (const char*)data+3, len-3);
+            BMK_checkResult64(XXH3_64bits_digest(&state), Nresult);
+        }
+
+        /* byte by byte ingestion */
+        {   size_t pos;
+            (void)XXH3_64bits_reset_withSeed(&state, seed);
+            for (pos=0; pos<len; pos++)
+                (void)XXH3_64bits_update(&state, ((const char*)data)+pos, 1);
+            BMK_checkResult64(XXH3_64bits_digest(&state), Nresult);
+    }   }
+}
+
+static void BMK_testXXH3_withSecret(const void* data, size_t len, const void* secret, size_t secretSize, U64 Nresult)
+{
+    {   U64 const Dresult = XXH3_64bits_withSecret(data, len, secret, secretSize);
+        BMK_checkResult64(Dresult, Nresult);
+    }
+
+    /* streaming API test */
+    {   XXH3_state_t state;
+        (void)XXH3_64bits_reset_withSecret(&state, secret, secretSize);
+        (void)XXH3_64bits_update(&state, data, len);
+        BMK_checkResult64(XXH3_64bits_digest(&state), Nresult);
+
+        /* byte by byte ingestion */
+        {   size_t pos;
+            (void)XXH3_64bits_reset_withSecret(&state, secret, secretSize);
+            for (pos=0; pos<len; pos++)
+                (void)XXH3_64bits_update(&state, ((const char*)data)+pos, 1);
+            BMK_checkResult64(XXH3_64bits_digest(&state), Nresult);
+    }   }
 }
 
 void BMK_testXXH128(const void* data, size_t len, U64 seed, XXH128_hash_t Nresult)
 {
     {   XXH128_hash_t const Dresult = XXH3_128bits_withSeed(data, len, seed);
         BMK_checkResult128(Dresult, Nresult);
+    }
 
-        /* check that XXH128() is identical to XXH3_128bits_withSeed() */
-        {   XXH128_hash_t const Dresult2 = XXH128(data, len, seed);
-            BMK_checkResult128(Dresult2, Nresult);
-        }
-
-        /* check that first field is equal to _64bits variant */
-        /* this property is currently lost
-        {   U64 const result64 = XXH3_64bits_withSeed(data, len, seed);
-            BMK_checkResult64(result64, Nresult.low64);
-        }
-        */
+    /* check that XXH128() is identical to XXH3_128bits_withSeed() */
+    {   XXH128_hash_t const Dresult2 = XXH128(data, len, seed);
+        BMK_checkResult128(Dresult2, Nresult);
     }
 
     /* check that the no-seed variant produces same result as seed==0 */
@@ -623,170 +706,206 @@ void BMK_testXXH128(const void* data, size_t len, U64 seed, XXH128_hash_t Nresul
         XXH128_hash_t const Dresult = XXH3_128bits(data, len);
         BMK_checkResult128(Dresult, Nresult);
     }
+
+    /* streaming API test */
+    {   XXH3_state_t state;
+
+        /* single ingestion */
+        (void)XXH3_128bits_reset_withSeed(&state, seed);
+        (void)XXH3_128bits_update(&state, data, len);
+        BMK_checkResult128(XXH3_128bits_digest(&state), Nresult);
+
+        if (len > 3) {
+            /* 2 ingestions */
+            (void)XXH3_128bits_reset_withSeed(&state, seed);
+            (void)XXH3_128bits_update(&state, data, 3);
+            (void)XXH3_128bits_update(&state, (const char*)data+3, len-3);
+            BMK_checkResult128(XXH3_128bits_digest(&state), Nresult);
+        }
+
+        /* byte by byte ingestion */
+        {   size_t pos;
+            (void)XXH3_128bits_reset_withSeed(&state, seed);
+            for (pos=0; pos<len; pos++)
+                (void)XXH3_128bits_update(&state, ((const char*)data)+pos, 1);
+            BMK_checkResult128(XXH3_128bits_digest(&state), Nresult);
+    }   }
+
 }
-
-static void BMK_testSequence(const void* sequence, size_t len, U32 seed, U32 Nresult)
-{
-    XXH32_state_t state;
-    U32 Dresult;
-    size_t pos;
-
-    Dresult = XXH32(sequence, len, seed);
-    BMK_checkResult32(Dresult, Nresult);
-
-    (void)XXH32_reset(&state, seed);
-    (void)XXH32_update(&state, sequence, len);
-    Dresult = XXH32_digest(&state);
-    BMK_checkResult32(Dresult, Nresult);
-
-    (void)XXH32_reset(&state, seed);
-    for (pos=0; pos<len; pos++)
-        (void)XXH32_update(&state, ((const char*)sequence)+pos, 1);
-    Dresult = XXH32_digest(&state);
-    BMK_checkResult32(Dresult, Nresult);
-}
-
 
 #define SANITY_BUFFER_SIZE 2243
 static void BMK_sanityCheck(void)
 {
     const U32 prime = 2654435761U;
-    const U64 prime64 = 11400714785074694793ULL;
-    BYTE sanityBuffer[SANITY_BUFFER_SIZE];
-    U32 byteGen = prime;
+    const U64 prime64 = 11400714785074694797ULL;
+    U8 sanityBuffer[SANITY_BUFFER_SIZE];
+    U64 byteGen = prime;
 
     int i;
     for (i=0; i<SANITY_BUFFER_SIZE; i++) {
-        sanityBuffer[i] = (BYTE)(byteGen>>24);
-        byteGen *= byteGen;
+        sanityBuffer[i] = (U8)(byteGen>>56);
+        byteGen *= prime64;
     }
 
-    BMK_testSequence(NULL,          0, 0,     0x02CC5D05);
-    BMK_testSequence(NULL,          0, prime, 0x36B78AE7);
-    BMK_testSequence(sanityBuffer,  1, 0,     0xB85CBEE5);
-    BMK_testSequence(sanityBuffer,  1, prime, 0xD5845D64);
-    BMK_testSequence(sanityBuffer, 14, 0,     0xE5AA0AB4);
-    BMK_testSequence(sanityBuffer, 14, prime, 0x4481951D);
-    BMK_testSequence(sanityBuffer,222, 0,     0xC8070816);
-    BMK_testSequence(sanityBuffer,222, prime, 0xF3CFC852);
 
-    BMK_testSequence64(NULL        ,  0, 0,     0xEF46DB3751D8E999ULL);
-    BMK_testSequence64(NULL        ,  0, prime, 0xAC75FDA2929B17EFULL);
-    BMK_testSequence64(sanityBuffer,  1, 0,     0x4FCE394CC88952D8ULL);
-    BMK_testSequence64(sanityBuffer,  1, prime, 0x739840CB819FA723ULL);
-    BMK_testSequence64(sanityBuffer, 14, 0,     0xCFFA8DB881BC3A3DULL);
-    BMK_testSequence64(sanityBuffer, 14, prime, 0x5B9611585EFCC9CBULL);
-    BMK_testSequence64(sanityBuffer,222, 0,     0x9DD507880DEBB03DULL);
-    BMK_testSequence64(sanityBuffer,222, prime, 0xDC515172B8EE0600ULL);
+    BMK_testXXH32(NULL,          0, 0,     0x02CC5D05);
+    BMK_testXXH32(NULL,          0, prime, 0x36B78AE7);
+    BMK_testXXH32(sanityBuffer,  1, 0,     0xCF65B03E);
+    BMK_testXXH32(sanityBuffer,  1, prime, 0xB4545AA4);
+    BMK_testXXH32(sanityBuffer, 14, 0,     0x1208E7E2);
+    BMK_testXXH32(sanityBuffer, 14, prime, 0x6AF1D1FE);
+    BMK_testXXH32(sanityBuffer,222, 0,     0x5BD11DBD);
+    BMK_testXXH32(sanityBuffer,222, prime, 0x58803C5F);
 
-    BMK_testXXH3(NULL,           0, 0,       0);                      /* zero-length hash is the seed == 0 by default */
-    BMK_testXXH3(NULL,           0, prime64, prime64);
-    BMK_testXXH3(sanityBuffer,   1, 0,       0xD00398B418222F66ULL);  /*  1 -  3 */
-    BMK_testXXH3(sanityBuffer,   1, prime64, 0x5EF5C7337AA1168CULL);  /*  1 -  3 */
-    BMK_testXXH3(sanityBuffer,   6, 0,       0x68537B93CD65EAFCULL);  /*  4 -  8 */
-    BMK_testXXH3(sanityBuffer,   6, prime64, 0xA36B56604D3DBE82ULL);  /*  4 -  8 */
-    BMK_testXXH3(sanityBuffer,  12, 0,       0x2FE2FCCCA6588881ULL);  /*  9 - 16 */
-    BMK_testXXH3(sanityBuffer,  12, prime64, 0x9C2CD5D85ECD70C2ULL);  /*  9 - 16 */
-    BMK_testXXH3(sanityBuffer,  24, 0,       0x5D1ACF28E03D292CULL);  /* 17 - 32 */
-    BMK_testXXH3(sanityBuffer,  24, prime64, 0x12E86CBA829EB02AULL);  /* 17 - 32 */
-    BMK_testXXH3(sanityBuffer,  48, 0,       0x89736A64A2E3ACF0ULL);  /* 33 - 64 */
-    BMK_testXXH3(sanityBuffer,  48, prime64, 0xA9AB767ADCAF987DULL);  /* 33 - 64 */
-    BMK_testXXH3(sanityBuffer,  80, 0,       0x33F6A85B289CED96ULL);  /* 65 - 96 */
-    BMK_testXXH3(sanityBuffer,  80, prime64, 0xCEC2ABFA9921D9F3ULL);  /* 65 - 96 */
-    BMK_testXXH3(sanityBuffer, 112, 0,       0xB02D718F40E65664ULL);  /* 97 -128 */
-    BMK_testXXH3(sanityBuffer, 112, prime64, 0x5DC1A8081633724EULL);  /* 97 -128 */
-    BMK_testXXH3(sanityBuffer, 192, 0,       0x944C286DF5682C8CULL);  /* one block, finishing at stripe boundary */
-    BMK_testXXH3(sanityBuffer, 192, prime64, 0x87F2E5E8102906E0ULL);  /* one block, finishing at stripe boundary */
-    BMK_testXXH3(sanityBuffer, 222, 0,       0x5EB0E26C52E65CFBULL);  /* one block, last stripe is overlapping */
-    BMK_testXXH3(sanityBuffer, 222, prime64, 0xEA096DA835DE9483ULL);  /* one block, last stripe is overlapping */
-    BMK_testXXH3(sanityBuffer,2048, 0,       0xC1B55DD62278D3F6ULL);  /* 2 blocks, finishing at block boundary */
-    BMK_testXXH3(sanityBuffer,2048, prime64, 0xA8416CC591E6057EULL);  /* 2 blocks, finishing at block boundary */
-    BMK_testXXH3(sanityBuffer,2240, 0,       0x0222DF03A2F13322ULL);  /* 3 blocks, finishing at stripe boundary */
-    BMK_testXXH3(sanityBuffer,2240, prime64, 0x02C46760EC80602FULL);  /* 3 blocks, finishing at stripe boundary */
-    BMK_testXXH3(sanityBuffer,2243, 0,       0x072D949235D92E59ULL);  /* 3 blocks, last stripe is overlapping */
-    BMK_testXXH3(sanityBuffer,2243, prime64, 0xBEDD0F5239FB92C8ULL);  /* 3 blocks, last stripe is overlapping */
+    BMK_testXXH64(NULL        ,  0, 0,     0xEF46DB3751D8E999ULL);
+    BMK_testXXH64(NULL        ,  0, prime, 0xAC75FDA2929B17EFULL);
+    BMK_testXXH64(sanityBuffer,  1, 0,     0xE934A84ADB052768ULL);
+    BMK_testXXH64(sanityBuffer,  1, prime, 0x5014607643A9B4C3ULL);
+    BMK_testXXH64(sanityBuffer,  4, 0,     0x9136A0DCA57457EEULL);
+    BMK_testXXH64(sanityBuffer, 14, 0,     0x8282DCC4994E35C8ULL);
+    BMK_testXXH64(sanityBuffer, 14, prime, 0xC3BD6BF63DEB6DF0ULL);
+    BMK_testXXH64(sanityBuffer,222, 0,     0xB641AE8CB691C174ULL);
+    BMK_testXXH64(sanityBuffer,222, prime, 0x20CB8AB7AE10C14AULL);
 
-#if 0
+    BMK_testXXH3(NULL,           0, 0,       0);                      /* zero-length hash is always 0 */
+    BMK_testXXH3(NULL,           0, prime64, 0);
+    BMK_testXXH3(sanityBuffer,   1, 0,       0x7198D737CFE7F386ULL);  /*  1 -  3 */
+    BMK_testXXH3(sanityBuffer,   1, prime64, 0xB70252DB7161C2BDULL);  /*  1 -  3 */
+    BMK_testXXH3(sanityBuffer,   6, 0,       0x22CBF5F3E1F6257CULL);  /*  4 -  8 */
+    BMK_testXXH3(sanityBuffer,   6, prime64, 0x6398631C12AB94CEULL);  /*  4 -  8 */
+    BMK_testXXH3(sanityBuffer,  12, 0,       0xD5361CCEEBB5A0CCULL);  /*  9 - 16 */
+    BMK_testXXH3(sanityBuffer,  12, prime64, 0xC4C125E75A808C3DULL);  /*  9 - 16 */
+    BMK_testXXH3(sanityBuffer,  24, 0,       0x46796F3F78B20F6BULL);  /* 17 - 32 */
+    BMK_testXXH3(sanityBuffer,  24, prime64, 0x60171A7CD0A44C10ULL);  /* 17 - 32 */
+    BMK_testXXH3(sanityBuffer,  48, 0,       0xD8D4D3590D136E11ULL);  /* 33 - 64 */
+    BMK_testXXH3(sanityBuffer,  48, prime64, 0x05441F2AEC2A1296ULL);  /* 33 - 64 */
+    BMK_testXXH3(sanityBuffer,  80, 0,       0xA1DC8ADB3145B86AULL);  /* 65 - 96 */
+    BMK_testXXH3(sanityBuffer,  80, prime64, 0xC9D55256965B7093ULL);  /* 65 - 96 */
+    BMK_testXXH3(sanityBuffer, 112, 0,       0xE43E5717A61D3759ULL);  /* 97 -128 */
+    BMK_testXXH3(sanityBuffer, 112, prime64, 0x5A5F89A3FECE44A5ULL);  /* 97 -128 */
+    BMK_testXXH3(sanityBuffer, 195, 0,       0x6F747739CBAC22A5ULL);  /* 129-240 */
+    BMK_testXXH3(sanityBuffer, 195, prime64, 0x33368E23C7F95810ULL);  /* 129-240 */
+
+    BMK_testXXH3(sanityBuffer, 403, 0,       0x4834389B15D981E8ULL);  /* one block, last stripe is overlapping */
+    BMK_testXXH3(sanityBuffer, 403, prime64, 0x85CE5DFFC7B07C87ULL);  /* one block, last stripe is overlapping */
+    BMK_testXXH3(sanityBuffer, 512, 0,       0x6A1B982631F059A8ULL);  /* one block, finishing at stripe boundary */
+    BMK_testXXH3(sanityBuffer, 512, prime64, 0x10086868CF0ADC99ULL);  /* one block, finishing at stripe boundary */
+    BMK_testXXH3(sanityBuffer,2048, 0,       0xEFEFD4449323CDD4ULL);  /* 2 blocks, finishing at block boundary */
+    BMK_testXXH3(sanityBuffer,2048, prime64, 0x01C85E405ECA3F6EULL);  /* 2 blocks, finishing at block boundary */
+    BMK_testXXH3(sanityBuffer,2240, 0,       0x998C0437486672C7ULL);  /* 3 blocks, finishing at stripe boundary */
+    BMK_testXXH3(sanityBuffer,2240, prime64, 0x4ED38056B87ABC7FULL);  /* 3 blocks, finishing at stripe boundary */
+    BMK_testXXH3(sanityBuffer,2243, 0,       0xA559D20581D742D3ULL);  /* 3 blocks, last stripe is overlapping */
+    BMK_testXXH3(sanityBuffer,2243, prime64, 0x96E051AB57F21FC8ULL);  /* 3 blocks, last stripe is overlapping */
+
+    {   const void* const secret = sanityBuffer + 7;
+        const size_t secretSize = XXH3_SECRET_SIZE_MIN + 11;
+        BMK_testXXH3_withSecret(NULL,           0, secret, secretSize, 0);                      /* zero-length hash is always 0 */
+        BMK_testXXH3_withSecret(sanityBuffer,   1, secret, secretSize, 0x7F69735D618DB3F0ULL);  /*  1 -  3 */
+        BMK_testXXH3_withSecret(sanityBuffer,   6, secret, secretSize, 0xBFCC7CB1B3554DCEULL);  /*  4 -  8 */
+        BMK_testXXH3_withSecret(sanityBuffer,  12, secret, secretSize, 0x8C50DC90AC9206FCULL);  /*  9 - 16 */
+        BMK_testXXH3_withSecret(sanityBuffer,  24, secret, secretSize, 0x1CD2C2EE9B9A0928ULL);  /* 17 - 32 */
+        BMK_testXXH3_withSecret(sanityBuffer,  48, secret, secretSize, 0xA785256D9D65D514ULL);  /* 33 - 64 */
+        BMK_testXXH3_withSecret(sanityBuffer,  80, secret, secretSize, 0x6F3053360D21BBB7ULL);  /* 65 - 96 */
+        BMK_testXXH3_withSecret(sanityBuffer, 112, secret, secretSize, 0x560E82D25684154CULL);  /* 97 -128 */
+        BMK_testXXH3_withSecret(sanityBuffer, 195, secret, secretSize, 0xBA5BDDBC5A767B11ULL);  /* 129-240 */
+
+        BMK_testXXH3_withSecret(sanityBuffer, 403, secret, secretSize, 0xFC3911BBA656DB58ULL);  /* one block, last stripe is overlapping */
+        BMK_testXXH3_withSecret(sanityBuffer, 512, secret, secretSize, 0x306137DD875741F1ULL);  /* one block, finishing at stripe boundary */
+        BMK_testXXH3_withSecret(sanityBuffer,2048, secret, secretSize, 0x2836B83880AD3C0CULL);  /* >= 2 blocks, at least one scrambling */
+        BMK_testXXH3_withSecret(sanityBuffer,2243, secret, secretSize, 0x3446E248A00CB44AULL);  /* >= 2 blocks, at least one scrambling, last stripe unaligned */
+    }
+
 
     {   XXH128_hash_t const expected = { 0, 0 };
         BMK_testXXH128(NULL,           0, 0,     expected);         /* zero-length hash is { seed, -seed } by default */
     }
-    {   XXH128_hash_t const expected = { prime, -(U64)prime };
+    {   XXH128_hash_t const expected = { 0, 0 };
         BMK_testXXH128(NULL,           0, prime, expected);
     }
-    {   XXH128_hash_t const expected = { 0xE2C6D3B40D6F9203ULL, 0x82895983D246CA74ULL };
+    {   XXH128_hash_t const expected = { 0x7198D737CFE7F386ULL, 0x153C28D2A04DC807ULL };
         BMK_testXXH128(sanityBuffer,   1, 0,     expected);         /* 1-3 */
     }
-    {   XXH128_hash_t const expected = { 0xCEE5DF124E6135DCULL, 0xFA2DA0269396F32DULL };
+    {   XXH128_hash_t const expected = { 0x8E05996EC27C0F46ULL, 0x89A7484EC876D545ULL };
         BMK_testXXH128(sanityBuffer,   1, prime, expected);         /* 1-3 */
     }
-    {   XXH128_hash_t const expected = { 0x585D6F8D1AAD96A2ULL, 0x2791F3B193F0AB86ULL };
+    {   XXH128_hash_t const expected = { 0x22CBF5F3E1F6257CULL, 0xD4E6C2B94FFC3BFAULL };
         BMK_testXXH128(sanityBuffer,   6, 0,     expected);         /* 4-8 */
     }
-    {   XXH128_hash_t const expected = { 0x133EC8CA1739250FULL, 0xDF3F422D70BDE07FULL };
+    {   XXH128_hash_t const expected = { 0x97B28D3079F8541FULL, 0xEFC0B954298E6555ULL };
         BMK_testXXH128(sanityBuffer,   6, prime, expected);         /* 4-8 */
     }
-    {   XXH128_hash_t const expected = { 0x0E85E122FE5356ACULL, 0xD933CC7EDF4D95DAULL };
+    {   XXH128_hash_t const expected = { 0x9044570967199F91ULL, 0x738EE3E642A85165ULL };
         BMK_testXXH128(sanityBuffer,  12, 0,     expected);         /* 9-16 */
     }
-    {   XXH128_hash_t const expected = { 0xE0DB5E70DA67EB16ULL, 0x114C8C76E74C669FULL };
+    {   XXH128_hash_t const expected = { 0xE3C75A78FE67D411ULL, 0xD4396DA60355312BULL };
         BMK_testXXH128(sanityBuffer,  12, prime, expected);         /* 9-16 */
     }
-    {   XXH128_hash_t const expected = { 0x6C213B15B89230C9ULL, 0x3F3AACF5F277AC02ULL };
+    {   XXH128_hash_t const expected = { 0x3FD725B2AABCF17DULL, 0x140592647F61C3E1ULL };
         BMK_testXXH128(sanityBuffer,  24, 0,     expected);         /* 17-32 */
     }
-    {   XXH128_hash_t const expected = { 0x71892DB847A8F53CULL, 0xD11561AC7D0F5ECDULL };
+    {   XXH128_hash_t const expected = { 0x9A09D0F4A694DC09ULL, 0x1291B0C7375510E3ULL };
         BMK_testXXH128(sanityBuffer,  24, prime, expected);         /* 17-32 */
     }
-    {   XXH128_hash_t const expected = { 0xECED834E8E99DA1EULL, 0x0F85E76A60898313ULL };
+    {   XXH128_hash_t const expected = { 0x891306BA9DD1D15BULL, 0x32A41AEEC6DE94DEULL };
         BMK_testXXH128(sanityBuffer,  48, 0,     expected);         /* 33-64 */
     }
-    {   XXH128_hash_t const expected = { 0xA901250B336F9133ULL, 0xA35D3FB395E1DDE0ULL };
+    {   XXH128_hash_t const expected = { 0xA199D324899B838EULL, 0x9BB6C003E18B3F75ULL };
         BMK_testXXH128(sanityBuffer,  48, prime, expected);         /* 33-64 */
     }
-    {   XXH128_hash_t const expected = { 0x338B2F6E103D5B4EULL, 0x5DD1777C8FA671ABULL };
+    {   XXH128_hash_t const expected = { 0x33AA30F9947E2743ULL, 0x46307D818EC98842ULL };
         BMK_testXXH128(sanityBuffer,  81, 0,     expected);         /* 65-96 */
     }
-    {   XXH128_hash_t const expected = { 0x0718382B6D4264C3ULL, 0x1D542DAFEFA1790EULL };
+    {   XXH128_hash_t const expected = { 0xAAF9F05DA0993E3CULL, 0x01752B9AFA24C856ULL };
         BMK_testXXH128(sanityBuffer,  81, prime, expected);         /* 65-96 */
     }
-    {   XXH128_hash_t const expected = { 0x7DE871A4FE41C90EULL, 0x786CB41C46C6B7B6ULL };
+    {   XXH128_hash_t const expected = { 0x01EE4637BFB66A1BULL, 0xE5CF6E0E85E92048ULL };
         BMK_testXXH128(sanityBuffer, 103, 0,     expected);         /* 97-128 */
     }
-    {   XXH128_hash_t const expected = { 0xAD8B0B428C940A2CULL, 0xF8BA6D8B8CB05EB7ULL };
+    {   XXH128_hash_t const expected = { 0x784D8A364F48D048ULL, 0x9010B884DAA01151ULL };
         BMK_testXXH128(sanityBuffer, 103, prime, expected);         /* 97-128 */
     }
-    {   XXH128_hash_t const expected = { 0x6D96AC3F415CFCFEULL, 0x947EDFA54DD68990ULL };
-        BMK_testXXH128(sanityBuffer, 192, 0,     expected);         /* one block, ends at stripe boundary */
+    {   XXH128_hash_t const expected = { 0x5FA77B9DFE8B5CAEULL, 0x2834B37CEC6A753FULL };
+        BMK_testXXH128(sanityBuffer, 192, 0,     expected);         /* 129-240 */
     }
-    {   XXH128_hash_t const expected = { 0xE4BD30AA1673B966ULL, 0x8132EF45FF3D51F2ULL };
-        BMK_testXXH128(sanityBuffer, 192, prime, expected);         /* one block, ends at stripe boundary */
+    {   XXH128_hash_t const expected = { 0x75441CE0359A979AULL, 0x399E2847427B3904ULL };
+        BMK_testXXH128(sanityBuffer, 192, prime, expected);         /* 129-240 */
     }
-    {   XXH128_hash_t const expected = { 0xB62929C362EF3BF5ULL, 0x1946A7A9E6DD3032ULL };
-        BMK_testXXH128(sanityBuffer, 222, 0,     expected);         /* one block, last stripe is overlapping */
+    {   XXH128_hash_t const expected = { 0xB02CC10BCFE61194ULL, 0xA27C9ABC8C06E4DDULL };
+        BMK_testXXH128(sanityBuffer, 222, 0,     expected);         /* 129-240 */
     }
-    {   XXH128_hash_t const expected = { 0x2782C3C49E3FD25EULL, 0x98CE16C40C2D59F6ULL };
-        BMK_testXXH128(sanityBuffer, 222, prime, expected);         /* one block, last stripe is overlapping */
+    {   XXH128_hash_t const expected = { 0x972CB9C6BD8123EDULL, 0x3488C87B4B6FCE5FULL };
+        BMK_testXXH128(sanityBuffer, 222, prime, expected);         /* 129-240 */
     }
-    {   XXH128_hash_t const expected = { 0x802EB54C97564FD7ULL, 0x384AADF242348D00ULL };
+    {   XXH128_hash_t const expected = { 0xB0C48E6D18E9D084ULL, 0xB16FC17E992FF45DULL };
+        BMK_testXXH128(sanityBuffer, 403, 0,     expected);         /* one block, last stripe is overlapping */
+    }
+    {   XXH128_hash_t const expected = { 0x0A1D320C9520871DULL, 0xCE11CB376EC93252ULL };
+        BMK_testXXH128(sanityBuffer, 403, prime64, expected);       /* one block, last stripe is overlapping */
+    }
+    {   XXH128_hash_t const expected = { 0xA03428558AC97327ULL, 0x4ECF51281BA406F7ULL };
+        BMK_testXXH128(sanityBuffer, 512, 0,     expected);         /* one block, finishing at stripe boundary */
+    }
+    {   XXH128_hash_t const expected = { 0xAF67A482D6C893F2ULL, 0x1382D92F25B84D90ULL };
+        BMK_testXXH128(sanityBuffer, 512, prime64, expected);       /* one block, finishing at stripe boundary */
+    }
+    {   XXH128_hash_t const expected = { 0x21901B416B3B9863ULL, 0x212AF8E6326F01E0ULL };
         BMK_testXXH128(sanityBuffer,2048, 0,     expected);         /* two blocks, finishing at block boundary */
     }
-    {   XXH128_hash_t const expected = { 0xC9F188CFAFDA22CDULL, 0x7936B69445BE9EEDULL };
+    {   XXH128_hash_t const expected = { 0xBDBB2282577DADECULL, 0xF78CDDC2C9A9A692ULL };
         BMK_testXXH128(sanityBuffer,2048, prime, expected);         /* two blocks, finishing at block boundary */
     }
-    {   XXH128_hash_t const expected = { 0x16B0035F6ABC1F46ULL, 0x1F6602850A1AA7EEULL };
+    {   XXH128_hash_t const expected = { 0x00AD52FA9385B6FEULL, 0xC705BAD3356CE302ULL };
         BMK_testXXH128(sanityBuffer,2240, 0,     expected);         /* two blocks, ends at stripe boundary */
     }
-    {   XXH128_hash_t const expected = { 0x389E68C2348B9161ULL, 0xA7D1E8C96586A052ULL };
+    {   XXH128_hash_t const expected = { 0x10FD0072EC68BFAAULL, 0xE1312F3458817F15ULL };
         BMK_testXXH128(sanityBuffer,2240, prime, expected);         /* two blocks, ends at stripe boundary */
     }
-    {   XXH128_hash_t const expected = { 0x8B1DE79158C397D3ULL, 0x9B6B2EEFAC2DE0ADULL };
+    {   XXH128_hash_t const expected = { 0x970C91411533862CULL, 0x4BBD06FF7BFF0AB1ULL };
         BMK_testXXH128(sanityBuffer,2237, 0,     expected);         /* two blocks, ends at stripe boundary */
     }
-    {   XXH128_hash_t const expected = { 0x9DDF09ABA2B93DD6ULL, 0xB9CEDBE2582CA371ULL };
+    {   XXH128_hash_t const expected = { 0xD80282846D814431ULL, 0x14EBB157B84D9785ULL };
         BMK_testXXH128(sanityBuffer,2237, prime, expected);         /* two blocks, ends at stripe boundary */
     }
-#endif
 
     DISPLAYLEVEL(3, "\r%70s\r", "");       /* Clean display line */
     DISPLAYLEVEL(3, "Sanity check -- all tests ok\n");
@@ -799,7 +918,7 @@ static void BMK_sanityCheck(void)
 
 static void BMK_display_LittleEndian(const void* ptr, size_t length)
 {
-    const BYTE* p = (const BYTE*)ptr;
+    const U8* p = (const U8*)ptr;
     size_t idx;
     for (idx=length-1; idx<length; idx--)    /* intentional underflow to negative to detect end */
         DISPLAYRESULT("%02x", p[idx]);
@@ -807,53 +926,72 @@ static void BMK_display_LittleEndian(const void* ptr, size_t length)
 
 static void BMK_display_BigEndian(const void* ptr, size_t length)
 {
-    const BYTE* p = (const BYTE*)ptr;
+    const U8* p = (const U8*)ptr;
     size_t idx;
     for (idx=0; idx<length; idx++)
         DISPLAYRESULT("%02x", p[idx]);
 }
 
-static void BMK_hashStream(void* xxhHashValue, const algoType hashType, FILE* inFile, void* buffer, size_t blockSize)
+typedef union {
+    XXH32_hash_t   xxh32;
+    XXH64_hash_t   xxh64;
+    XXH128_hash_t xxh128;
+} Multihash;
+
+/* BMK_hashStream :
+ * read data from inFile,
+ * generating incremental hash of type hashType,
+ * using buffer of size blockSize for temporary storage. */
+static Multihash
+BMK_hashStream(FILE* inFile,
+               algoType hashType,
+               void* buffer, size_t blockSize)
 {
-    XXH64_state_t state64;
     XXH32_state_t state32;
-    size_t readSize;
+    XXH64_state_t state64;
+    XXH3_state_t state128;
 
     /* Init */
     (void)XXH32_reset(&state32, XXHSUM32_DEFAULT_SEED);
     (void)XXH64_reset(&state64, XXHSUM64_DEFAULT_SEED);
+    (void)XXH3_128bits_reset(&state128);
 
     /* Load file & update hash */
-    readSize = 1;
-    while (readSize) {
-        readSize = fread(buffer, 1, blockSize, inFile);
+    {   size_t readSize = 1;
+        while (readSize) {
+            readSize = fread(buffer, 1, blockSize, inFile);
+            switch(hashType)
+            {
+            case algo_xxh32:
+                (void)XXH32_update(&state32, buffer, readSize);
+                break;
+            case algo_xxh64:
+                (void)XXH64_update(&state64, buffer, readSize);
+                break;
+            case algo_xxh128:
+                (void)XXH3_128bits_update(&state128, buffer, readSize);
+                break;
+            default:
+                assert(0);
+            }
+    }   }
+
+    {   Multihash finalHash;
         switch(hashType)
         {
         case algo_xxh32:
-            (void)XXH32_update(&state32, buffer, readSize);
+            finalHash.xxh32 = XXH32_digest(&state32);
             break;
         case algo_xxh64:
-            (void)XXH64_update(&state64, buffer, readSize);
+            finalHash.xxh64 = XXH64_digest(&state64);
+            break;
+        case algo_xxh128:
+            finalHash.xxh128 = XXH3_128bits_digest(&state128);
             break;
         default:
-            break;
+            assert(0);
         }
-    }
-
-    switch(hashType)
-    {
-    case algo_xxh32:
-        {   U32 const h32 = XXH32_digest(&state32);
-            memcpy(xxhHashValue, &h32, sizeof(h32));
-            break;
-        }
-    case algo_xxh64:
-        {   U64 const h64 = XXH64_digest(&state64);
-            memcpy(xxhHashValue, &h64, sizeof(h64));
-            break;
-        }
-    default:
-            break;
+        return finalHash;
     }
 }
 
@@ -867,19 +1005,18 @@ static int BMK_hash(const char* fileName,
     FILE*  inFile;
     size_t const blockSize = 64 KB;
     void*  buffer;
-    U32    h32 = 0;
-    U64    h64 = 0;
+    Multihash hashValue;
 
     /* Check file existence */
     if (fileName == stdinName) {
         inFile = stdin;
         fileName = "stdin";
         SET_BINARY_MODE(stdin);
-    }
-    else
+    } else {
         inFile = fopen( fileName, "rb" );
+    }
     if (inFile==NULL) {
-        DISPLAY("Error: Could not open '%s': %s.\n", fileName, strerror(errno));
+        DISPLAY("Error: Could not open '%s': %s. \n", fileName, strerror(errno));
         return 1;
     }
 
@@ -900,53 +1037,52 @@ static int BMK_hash(const char* fileName,
             && (fileNameEnd[-1-infoFilenameSize] != '/')
             && (fileNameEnd[-1-infoFilenameSize] != '\\') )
               infoFilenameSize++;
-        DISPLAY("\rLoading %s...  \r", fileNameEnd - infoFilenameSize);
+        DISPLAYLEVEL(2, "\rLoading %s...  \r", fileNameEnd - infoFilenameSize);
 
         /* Load file & update hash */
-        switch(hashType)
-        {
-        case algo_xxh32:
-            BMK_hashStream(&h32, algo_xxh32, inFile, buffer, blockSize);
-            break;
-        case algo_xxh64:
-            BMK_hashStream(&h64, algo_xxh64, inFile, buffer, blockSize);
-            break;
-        default:
-            break;
-        }
+        hashValue = BMK_hashStream(inFile, hashType, buffer, blockSize);
 
         fclose(inFile);
         free(buffer);
-        DISPLAY("%s             \r", fileNameEnd - infoFilenameSize);  /* erase line */
+        DISPLAYLEVEL(2, "%*s             \r", infoFilenameSize, "");  /* erase line */
     }
 
-    /* display Hash */
+    /* display Hash value followed by file name */
     switch(hashType)
     {
     case algo_xxh32:
         {   XXH32_canonical_t hcbe32;
-            (void)XXH32_canonicalFromHash(&hcbe32, h32);
+            (void)XXH32_canonicalFromHash(&hcbe32, hashValue.xxh32);
             displayEndianess==big_endian ?
                 BMK_display_BigEndian(&hcbe32, sizeof(hcbe32)) : BMK_display_LittleEndian(&hcbe32, sizeof(hcbe32));
-            DISPLAYRESULT("  %s\n", fileName);
             break;
         }
     case algo_xxh64:
         {   XXH64_canonical_t hcbe64;
-            (void)XXH64_canonicalFromHash(&hcbe64, h64);
+            (void)XXH64_canonicalFromHash(&hcbe64, hashValue.xxh64);
             displayEndianess==big_endian ?
                 BMK_display_BigEndian(&hcbe64, sizeof(hcbe64)) : BMK_display_LittleEndian(&hcbe64, sizeof(hcbe64));
-            DISPLAYRESULT("  %s\n", fileName);
+            break;
+        }
+    case algo_xxh128:
+        {   XXH128_canonical_t hcbe128;
+            (void)XXH128_canonicalFromHash(&hcbe128, hashValue.xxh128);
+            displayEndianess==big_endian ?
+                BMK_display_BigEndian(&hcbe128, sizeof(hcbe128)) : BMK_display_LittleEndian(&hcbe128, sizeof(hcbe128));
             break;
         }
     default:
-            break;
+        assert(0);
     }
+    DISPLAYRESULT("  %s\n", fileName);
 
     return 0;
 }
 
 
+/* BMK_hashFiles:
+ * if fnTotal==0, read from stdin insteal
+ */
 static int BMK_hashFiles(const char** fnList, int fnTotal,
                          algoType hashType, endianess displayEndianess)
 {
@@ -958,7 +1094,7 @@ static int BMK_hashFiles(const char** fnList, int fnTotal,
 
     for (fnNb=0; fnNb<fnTotal; fnNb++)
         result += BMK_hash(fnList[fnNb], hashType, displayEndianess);
-    DISPLAY("\r%70s\r", "");
+    DISPLAYLEVEL(2, "\r%70s\r", "");
     return result;
 }
 
@@ -989,6 +1125,7 @@ typedef enum {
 typedef union {
     XXH32_canonical_t xxh32;
     XXH64_canonical_t xxh64;
+    XXH128_canonical_t xxh128;
 } Canonical;
 
 typedef struct {
@@ -1163,6 +1300,16 @@ static ParseLineResult parseLine(ParsedLine* parsedLine, const char* line)
                 break;
             }
 
+        case 32:
+            {   XXH128_canonical_t* xxh128c = &parsedLine->canonical.xxh128;
+                if (canonicalFromString(xxh128c->digest, sizeof(xxh128c->digest), line)
+                    != CanonicalFromString_ok) {
+                    return ParseLine_invalidFormat;
+                }
+                parsedLine->xxhBits = 128;
+                break;
+            }
+
         default:
                 return ParseLine_invalidFormat;
                 break;
@@ -1185,55 +1332,54 @@ static void parseFile1(ParseFileArg* parseFileArg)
     memset(report, 0, sizeof(*report));
 
     while (!report->quit) {
-        FILE* fp = NULL;
         LineStatus lineStatus = LineStatus_hashFailed;
-        GetLineResult getLineResult;
         ParsedLine parsedLine;
         memset(&parsedLine, 0, sizeof(parsedLine));
 
         lineNumber++;
         if (lineNumber == 0) {
-            /* This is unlikely happen, but md5sum.c has this
-             * error check. */
+            /* This is unlikely happen, but md5sum.c has this error check. */
             DISPLAY("%s: Error: Too many checksum lines\n", inFileName);
             report->quit = 1;
             break;
         }
 
-        getLineResult = getLine(&parseFileArg->lineBuf, &parseFileArg->lineMax,
-                                parseFileArg->inFile);
-        if (getLineResult != GetLine_ok) {
-            if (getLineResult == GetLine_eof) break;
+        {   GetLineResult const getLineResult = getLine(&parseFileArg->lineBuf,
+                                                        &parseFileArg->lineMax,
+                                                         parseFileArg->inFile);
+            if (getLineResult != GetLine_ok) {
+                if (getLineResult == GetLine_eof) break;
 
-            switch (getLineResult)
-            {
-            case GetLine_ok:
-            case GetLine_eof:
-                /* These cases never happen.  See above getLineResult related "if"s.
-                   They exist just for make gcc's -Wswitch-enum happy. */
-                break;
+                switch (getLineResult)
+                {
+                case GetLine_ok:
+                case GetLine_eof:
+                    /* These cases never happen.  See above getLineResult related "if"s.
+                       They exist just for make gcc's -Wswitch-enum happy. */
+                    assert(0);
+                    break;
 
-            default:
-                DISPLAY("%s:%lu: Error: Unknown error.\n", inFileName, lineNumber);
-                break;
+                default:
+                    DISPLAY("%s:%lu: Error: Unknown error.\n", inFileName, lineNumber);
+                    break;
 
-            case GetLine_exceedMaxLineLength:
-                DISPLAY("%s:%lu: Error: Line too long.\n", inFileName, lineNumber);
-                break;
+                case GetLine_exceedMaxLineLength:
+                    DISPLAY("%s:%lu: Error: Line too long.\n", inFileName, lineNumber);
+                    break;
 
-            case GetLine_outOfMemory:
-                DISPLAY("%s:%lu: Error: Out of memory.\n", inFileName, lineNumber);
+                case GetLine_outOfMemory:
+                    DISPLAY("%s:%lu: Error: Out of memory.\n", inFileName, lineNumber);
+                    break;
+                }
+                report->quit = 1;
                 break;
-            }
-            report->quit = 1;
-            break;
-        }
+        }   }
 
         if (parseLine(&parsedLine, parseFileArg->lineBuf) != ParseLine_ok) {
             report->nImproperlyFormattedLines++;
             if (parseFileArg->warn) {
-                DISPLAY("%s:%lu: Error: Improperly formatted checksum line.\n"
-                    , inFileName, lineNumber);
+                DISPLAY("%s:%lu: Error: Improperly formatted checksum line.\n",
+                        inFileName, lineNumber);
             }
             continue;
         }
@@ -1243,8 +1389,8 @@ static void parseFile1(ParseFileArg* parseFileArg)
             report->nImproperlyFormattedLines++;
             report->nMixedFormatLines++;
             if (parseFileArg->warn) {
-                DISPLAY("%s : %lu: Error: Multiple hash types in one file.\n"
-                    , inFileName, lineNumber);
+                DISPLAY("%s : %lu: Error: Multiple hash types in one file.\n",
+                        inFileName, lineNumber);
             }
             continue;
         }
@@ -1254,25 +1400,32 @@ static void parseFile1(ParseFileArg* parseFileArg)
             report->xxhBits = parsedLine.xxhBits;
         }
 
-        fp = fopen(parsedLine.filename, "rb");
-        if (fp == NULL) {
-            lineStatus = LineStatus_failedToOpen;
-        } else {
+        do {
+            FILE* const fp = fopen(parsedLine.filename, "rb");
+            if (fp == NULL) {
+                lineStatus = LineStatus_failedToOpen;
+                break;
+            }
             lineStatus = LineStatus_hashFailed;
             switch (parsedLine.xxhBits)
             {
             case 32:
-                {   XXH32_hash_t xxh;
-                    BMK_hashStream(&xxh, algo_xxh32, fp, parseFileArg->blockBuf, parseFileArg->blockSize);
-                    if (xxh == XXH32_hashFromCanonical(&parsedLine.canonical.xxh32)) {
+                {   Multihash const xxh = BMK_hashStream(fp, algo_xxh32, parseFileArg->blockBuf, parseFileArg->blockSize);
+                    if (xxh.xxh32 == XXH32_hashFromCanonical(&parsedLine.canonical.xxh32)) {
                         lineStatus = LineStatus_hashOk;
                 }   }
                 break;
 
             case 64:
-                {   XXH64_hash_t xxh;
-                    BMK_hashStream(&xxh, algo_xxh64, fp, parseFileArg->blockBuf, parseFileArg->blockSize);
-                    if (xxh == XXH64_hashFromCanonical(&parsedLine.canonical.xxh64)) {
+                {   Multihash const xxh = BMK_hashStream(fp, algo_xxh64, parseFileArg->blockBuf, parseFileArg->blockSize);
+                    if (xxh.xxh64 == XXH64_hashFromCanonical(&parsedLine.canonical.xxh64)) {
+                        lineStatus = LineStatus_hashOk;
+                }   }
+                break;
+
+            case 128:
+                {   Multihash const xxh = BMK_hashStream(fp, algo_xxh128, parseFileArg->blockBuf, parseFileArg->blockSize);
+                    if (XXH128_isEqual(xxh.xxh128, XXH128_hashFromCanonical(&parsedLine.canonical.xxh128))) {
                         lineStatus = LineStatus_hashOk;
                 }   }
                 break;
@@ -1281,7 +1434,7 @@ static void parseFile1(ParseFileArg* parseFileArg)
                 break;
             }
             fclose(fp);
-        }
+        } while (0);
 
         switch (lineStatus)
         {
@@ -1332,7 +1485,6 @@ static void parseFile1(ParseFileArg* parseFileArg)
  *    - All files are properly opened and read.
  *    - All hash values match with its content.
  *    - (strict mode) All lines in checksum file are consistent and well formatted.
- *
  */
 static int checkFile(const char* inFileName,
                      const endianess displayEndianess,
@@ -1448,11 +1600,11 @@ static int usage(const char* exename)
 {
     DISPLAY( WELCOME_MESSAGE(exename) );
     DISPLAY( "Usage :\n");
-    DISPLAY( "      %s [arg] [filenames]\n", exename);
-    DISPLAY( "When no filename provided, or - provided : use stdin as input\n");
-    DISPLAY( "Arguments :\n");
-    DISPLAY( " -H# : hash selection : 0=32bits, 1=64bits (default: %i)\n", (int)g_defaultAlgo);
-    DISPLAY( " -c  : read xxHash sums from the [filenames] and check them\n");
+    DISPLAY( "      %s [arg] [filenames] \n", exename);
+    DISPLAY( "When no filename provided, or - provided : use stdin as input \n");
+    DISPLAY( "Arguments : \n");
+    DISPLAY( " -H# : hash selection : 0=32bits, 1=64bits, 2=128bits (default: %i)\n", (int)g_defaultAlgo);
+    DISPLAY( " -c  : read xxHash sums from the [filenames] and check them \n");
     DISPLAY( " -h  : help \n");
     return 0;
 }
@@ -1462,17 +1614,18 @@ static int usage_advanced(const char* exename)
 {
     usage(exename);
     DISPLAY( "Advanced :\n");
-    DISPLAY( " --little-endian : hash printed using little endian convention (default: big endian)\n");
-    DISPLAY( " -V, --version   : display version\n");
-    DISPLAY( " -h, --help      : display long help and exit\n");
+    DISPLAY( " -V, --version   : display version \n");
+    DISPLAY( " -q, --quiet     : do not display 'Loading' messages \n");
+    DISPLAY( " --little-endian : hash printed using little endian convention (default: big endian) \n");
+    DISPLAY( " -h, --help      : display long help and exit \n");
     DISPLAY( " -b  : benchmark mode \n");
-    DISPLAY( " -i# : number of iterations (benchmark mode; default %u)\n", g_nbIterations);
+    DISPLAY( " -i# : number of iterations (benchmark mode; default %u) \n", g_nbIterations);
     DISPLAY( "\n");
-    DISPLAY( "The following four options are useful only when verifying checksums (-c):\n");
-    DISPLAY( "--strict : don't print OK for each successfully verified file\n");
-    DISPLAY( "--status : don't output anything, status code shows success\n");
-    DISPLAY( "--quiet  : exit non-zero for improperly formatted checksum lines\n");
-    DISPLAY( "--warn   : warn about improperly formatted checksum lines\n");
+    DISPLAY( "The following four options are useful only when verifying checksums (-c): \n");
+    DISPLAY( "--strict : don't print OK for each successfully verified file \n");
+    DISPLAY( "--status : don't output anything, status code shows success \n");
+    DISPLAY( "-q, --quiet : exit non-zero for improperly formatted checksum lines \n");
+    DISPLAY( "--warn   : warn about improperly formatted checksum lines \n");
     return 0;
 }
 
@@ -1542,14 +1695,15 @@ int main(int argc, const char** argv)
     U32 strictMode    = 0;
     U32 statusOnly    = 0;
     U32 warn          = 0;
-    U32 quiet         = 0;
     U32 specificTest  = 0;
     size_t keySize    = XXH_DEFAULT_SAMPLE_SIZE;
     algoType algo     = g_defaultAlgo;
     endianess displayEndianess = big_endian;
 
-    /* special case : xxh32sum default to 32 bits checksum */
-    if (strstr(exename, "xxh32sum") != NULL) algo = algo_xxh32;
+    /* special case : xxhNNsum default to NN bits checksum */
+    if (strstr(exename,  "xxh32sum") != NULL) algo = algo_xxh32;
+    if (strstr(exename,  "xxh64sum") != NULL) algo = algo_xxh64;
+    if (strstr(exename, "xxh128sum") != NULL) algo = algo_xxh128;
 
     for(i=1; i<argc; i++) {
         const char* argument = argv[i];
@@ -1560,7 +1714,7 @@ int main(int argc, const char** argv)
         if (!strcmp(argument, "--check")) { fileCheckMode = 1; continue; }
         if (!strcmp(argument, "--strict")) { strictMode = 1; continue; }
         if (!strcmp(argument, "--status")) { statusOnly = 1; continue; }
-        if (!strcmp(argument, "--quiet")) { quiet = 1; continue; }
+        if (!strcmp(argument, "--quiet")) { g_displayLevel--; continue; }
         if (!strcmp(argument, "--warn")) { warn = 1; continue; }
         if (!strcmp(argument, "--help")) { return usage_advanced(exename); }
         if (!strcmp(argument, "--version")) { DISPLAY(WELCOME_MESSAGE(exename)); return 0; }
@@ -1588,6 +1742,8 @@ int main(int argc, const char** argv)
             case 'H':
                 algo = (algoType)(argument[1] - '0');
                 argument+=2;
+                if (!((algo >= algo_xxh32) && (algo <= algo_xxh128)))
+                    return badusage(exename);
                 break;
 
             /* File check mode */
@@ -1647,10 +1803,8 @@ int main(int argc, const char** argv)
     if (filenamesStart==0) filenamesStart = argc;
     if (fileCheckMode) {
         return checkFiles(argv+filenamesStart, argc-filenamesStart,
-                          displayEndianess, strictMode, statusOnly, warn, quiet);
+                          displayEndianess, strictMode, statusOnly, warn, (g_displayLevel < 2) /*quiet*/);
     } else {
         return BMK_hashFiles(argv+filenamesStart, argc-filenamesStart, algo, displayEndianess);
     }
 }
-
-#endif /* XXHASH_C_2097394837 */
