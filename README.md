@@ -50,3 +50,4 @@ git pull
 ## Contributors
 
 - [Lucjan Suski](https://github.com/methyl) - creator and maintainer
+- [BlackHabanero](https://github.com/BlackHabanero) - maintainer
