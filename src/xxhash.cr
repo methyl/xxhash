@@ -1,7 +1,7 @@
 require "./LibXXH"
 
 module Xxhash
-  VERSION = "0.3.0"
+  VERSION = "0.3.1"
 
   class Hash32
     @state : LibXXHash::XXH32_State*
