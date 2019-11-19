@@ -34,6 +34,14 @@ describe Xxhash do
           hash.digest.should eq(17909425895861273630)
         end
       end
+      it "82588 as seed" do
+        Xxhash::Hash64.open(82558) do |hash|
+          File.open("./spec/dummy.txt") do |file|
+            hash.update(file.gets_to_end.to_slice)
+          end
+          hash.digest.should eq(925394387188055322)
+        end
+      end
     end
   end
   context "calculates hash32" do
@@ -56,6 +64,14 @@ describe Xxhash do
         Xxhash::Hash32.open(13) do |hash|
           hash.update("test hash".to_slice)
           hash.digest.should eq(2647094367)
+        end
+      end
+      it "82588 as seed" do
+        Xxhash::Hash32.open(82558) do |hash|
+          File.open("./spec/dummy.txt") do |file|
+            hash.update(file.gets_to_end.to_slice)
+          end
+          hash.digest.should eq(2938057424)
         end
       end
     end
