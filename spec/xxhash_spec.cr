@@ -36,10 +36,10 @@ describe Xxhash do
       end
       it "82588 as seed" do
         Xxhash::Hash64.open(82558) do |hash|
-          File.open("./spec/TDEP.txt") do |file|
+          File.open("./spec/dummy.txt") do |file|
             hash.update(file.gets_to_end.to_slice)
           end
-          hash.digest.should eq(5587456082542766696)
+          hash.digest.should eq(925394387188055322)
         end
       end
     end
@@ -68,10 +68,10 @@ describe Xxhash do
       end
       it "82588 as seed" do
         Xxhash::Hash32.open(82558) do |hash|
-          File.open("./spec/TDEP.txt") do |file|
+          File.open("./spec/dummy.txt") do |file|
             hash.update(file.gets_to_end.to_slice)
           end
-          hash.digest.should eq(1479737259)
+          hash.digest.should eq(2938057424)
         end
       end
     end
