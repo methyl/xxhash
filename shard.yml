@@ -9,4 +9,8 @@ crystal: 0.31.1
 scripts:
   postinstall: cd src/xxHash && make
 
+targets:
+  xxhash:
+    main: src/xxhash.cr
+
 license: MIT
