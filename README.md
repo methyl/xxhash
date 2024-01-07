@@ -28,7 +28,14 @@ assert Xxhash.hash64("test hash") == 11437837717929986876
 
 ```
 cd src/xxHash
-git pull
+```
+
+Pull latest from repo: https://github.com/Cyan4973/xxHash/tree/dev
+
+### Specs
+
+```
+crystal spec
 ```
 
 ### TODO
