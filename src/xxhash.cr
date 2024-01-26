@@ -1,7 +1,77 @@
 require "./LibXXH"
 
 module Xxhash
-  VERSION = "0.3.1"
+  VERSION = "0.8.2"
+
+  class Hash3
+    @state : LibXXHash::XXH3_State*
+    @closed : Bool
+
+    def initialize(seed : LibC::UInt = 0)
+      @closed = false
+      @state = LibXXHash.hash3_create_state
+
+      if seed == 0
+        unless LibXXHash.hash3_reset(@state) == LibXXHash::Errorcode::OK
+          raise XXHashError.new("Cannot initialize hash3 state")
+        end
+      else
+        unless LibXXHash.hash3_reset_withSeed(@state, seed) == LibXXHash::Errorcode::OK
+          raise XXHashError.new("Cannot initialize hash3 state")
+        end
+      end
+    end
+
+    def self.open()
+      hash3 = new()
+      yield hash3 ensure hash3.close
+    end
+
+    def self.open_with_seed(seed : LibC::UInt)
+      hash3 = new(seed: seed)
+      yield hash3 ensure hash3.close
+    end
+
+    def reset(seed : LibC::UInt = 0)
+      initialize(seed: seed)
+    end
+
+    def update(slice : Bytes)
+      return if @closed
+      unless LibXXHash.hash3_update(@state, slice, slice.size.to_u64) == LibXXHash::Errorcode::OK
+        raise XXHashError.new("Cannot update hash3")
+      end
+    end
+
+    def digest : LibC::UInt|Nil
+      return if @closed
+      LibXXHash.hash3_digest(@state)
+    end
+
+    def close
+      return if @closed
+      unless LibXXHash.hash3_free_state(@state) == LibXXHash::Errorcode::OK
+        raise XXHashError.new("Cannot close hash3")
+      end
+      @closed = true
+    end
+
+    def self.hash(slice : Bytes) : LibC::UInt
+      LibXXHash.hash3_straight(slice, slice.size)
+    end
+
+    def self.hash_with_seed(slice : Bytes, seed : LibC::UInt) : LibC::UInt
+      LibXXHash.hash3_straight_withSeed(slice, slice.size, seed)
+    end
+
+    def self.hash(text : String) : LibC::UInt
+      self.hash(text.to_slice)
+    end
+
+    def self.hash_with_seed(text : String, seed : LibC::UInt) : LibC::UInt
+      self.hash_with_seed(text.to_slice, seed: seed)
+    end
+  end
 
   class Hash32
     @state : LibXXHash::XXH32_State*
@@ -21,7 +91,7 @@ module Xxhash
     end
 
     def reset(seed : LibC::UInt = 0)
-        initialize(seed: seed)
+      initialize(seed: seed)
     end
 
     def update(slice : Bytes)
@@ -71,7 +141,7 @@ module Xxhash
     end
 
     def reset(seed : LibC::ULongLong = 0)
-        initialize(seed: seed)
+      initialize(seed: seed)
     end
 
     def update(slice : Bytes)
